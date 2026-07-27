@@ -515,6 +515,8 @@ export type Tui = {
 	setStatus: (s: string) => void
 	setWorking: (working: boolean) => void
 	setCommands: (items: PaletteItem[]) => void
+	/** Clears and redraws the screen. */
+	redraw: () => void
 	/**
 	 * Blocks the prompt until the user answers. Denies if the session ends first,
 	 * because a question nobody answered is not consent.
@@ -1644,6 +1646,10 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 		pasteImage: () => {
 			if (done || suspended) return Promise.resolve()
 			return pasteImage()
+		},
+		redraw: () => {
+			if (done) return
+			redraw()
 		},
 		close,
 		closed,

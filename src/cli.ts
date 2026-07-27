@@ -1078,6 +1078,12 @@ async function main() {
 			run: () => tui.pasteImage(),
 		}] : []),
 		{
+			id: "clear",
+			title: "Clear screen",
+			hint: "Ctrl+L",
+			run: () => tui?.redraw(),
+		},
+		{
 			id: "tools",
 			title: "List tools",
 			hint: `${session.tools.all().length} registered`,
