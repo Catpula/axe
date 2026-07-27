@@ -1267,6 +1267,7 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 			case "enter": {
 				const item = palette.selected()
 				const isSlashPicker = !palette.groupFilter
+				const query = palette.query
 				closePalette()
 				if (item) {
 					if (isSlashPicker) {
@@ -1274,6 +1275,10 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 						line(`${CYAN}\u203a ${text}${RESET}`)
 					}
 					void item.run()
+				} else if (isSlashPicker && query.trim()) {
+					const text = safeTerminalText(`/${query}`).replace(/\n/g, "\n  ")
+					line(`${CYAN}\u203a ${text}${RESET}`)
+					onLine(`/${query}`)
 				}
 				return
 			}
