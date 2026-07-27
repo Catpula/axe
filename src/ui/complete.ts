@@ -4,8 +4,7 @@
  * `@` is a typing aid, not a command. What it leaves in the prompt is a path
  * the user could have typed by hand, the model sees nothing it would not have
  * seen anyway, and no tool is added: the agent still reads the file with
- * `read_file`. That is the same bargain the palette makes, which is why this
- * does not reopen the question of slash commands.
+ * `read_file`.
  *
  * All of it is pure, because a completion that picks the wrong file or eats the
  * wrong characters is a bug you can only find by testing it.

@@ -61,6 +61,7 @@ import { agentUI, makeUI } from "./ui/plain.ts"
 import { makeTui, type PaletteItem, type Tui } from "./ui/tui.ts"
 
 const DIM = "\x1b[2m"
+const CYAN = "\x1b[36m"
 const RESET = "\x1b[0m"
 
 // axe never runs in the background, so something else has to knock. Printed
@@ -1177,7 +1178,7 @@ async function main() {
 	while (!stop) {
 		let input: string
 		try {
-			input = (await rl.question("\u203a ", { signal: replAbort.signal })).trim()
+			input = (await rl.question(`${CYAN}\u203a${RESET} `, { signal: replAbort.signal })).trim()
 		} catch {
 			denyPlainApprovals()
 			break

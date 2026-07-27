@@ -138,9 +138,11 @@ const tui = makeTui("model · $0.00", {
 	files: async () => ["src/cli.ts", "src/ui/tui.ts"],
 	queued: () => queued,
 })
+let slashRan = false
 tui.setCommands([
-	{ id: "a", title: "Effort: low", run: () => {} },
-	{ id: "b", title: "Effort: high", run: () => {} },
+	{ id: "cost", title: "Show cost so far", run: () => { slashRan = true } },
+	{ id: "a", title: "Effort: low", group: "settings", run: () => {} },
+	{ id: "b", title: "Effort: high", group: "settings", run: () => {} },
 ])
 await tick()
 check("an empty composer has a visible prompt", screen.line(24).includes("› Message axe…"), screen.dump())
@@ -180,15 +182,34 @@ await tick()
 check("queued input is visible while work continues", screen.line(23).includes("2 queued"), screen.dump())
 queued = 0
 
-// The palette outranks the panel, and gives the rows back on close.
+// Ctrl+O outranks the panel, shows only settings, and gives the rows back.
 key("\x0f")
 await tick()
 check("the palette takes over", above(7).some((l) => l.includes("Effort: low")), screen.dump())
+check("settings mode hides plain commands", !screen.dump().includes("Show cost so far"), screen.dump())
 key("\x1b")
 await tick()
 const back = above(3)
 check("the panel returns after the palette", back.some((l) => l.includes("read_file")), screen.dump())
 check("no palette row survives", !screen.dump().includes("Effort:"), screen.dump())
+
+// `/` outranks the panel too, and shows only plain commands.
+key("/")
+await tick()
+check("the slash picker takes over", above(7).some((l) => l.includes("/cost")), screen.dump())
+check("settings stay out of the slash picker", !screen.dump().includes("Effort:"), screen.dump())
+key("\x1b")
+await tick()
+check("the panel returns after the slash picker", above(3).some((l) => l.includes("read_file")), screen.dump())
+check("no slash row survives", !screen.dump().includes("/cost"), screen.dump())
+key("\x7f")
+key("/cos")
+await tick()
+key("\r")
+await tick()
+check("enter runs the slash command", slashRan, screen.dump())
+check("running a slash command clears the composer", !screen.line(24).includes("/cos"), screen.dump())
+check("the run is echoed to the transcript", screen.dump().includes("› /cost"), screen.dump())
 
 // `@` outranks the panel too.
 key("@cli")

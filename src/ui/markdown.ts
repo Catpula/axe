@@ -8,6 +8,7 @@
  */
 
 import { BOLD, CYAN, DIM, ITALIC, RESET, UNDERLINE } from "./color.ts"
+import { highlightCode } from "./syntax.ts"
 import { safeTerminalText } from "./terminal.ts"
 
 type Align = "left" | "center" | "right"
@@ -232,7 +233,7 @@ export class MarkdownRenderer {
 	private candidate: string | null = null
 	private table: { header: string[]; rows: string[][]; alignments: Align[] } | null = null
 	/** The open fence, so that ``` inside a ~~~ block stays content. */
-	private fence: { char: string; length: number; indent: number } | null = null
+	private fence: { char: string; length: number; indent: number; lang: string } | null = null
 	private indented = false
 	/** Whether an indented block may start here: only after a blank, never under a list. */
 	private blankBefore = true
@@ -247,9 +248,11 @@ export class MarkdownRenderer {
 		return this.fence !== null || this.indented
 	}
 
-	private codeLines(text: string, columns: number): string[] {
+	private codeLines(text: string, columns: number, lang = ""): string[] {
+		// Highlighting runs after the wrap: the wrap measures raw text, and the
+		// highlighter only ever adds SGR runs, so the widths still agree.
 		return wrapLiteral(text, Math.max(1, columns - 2), this.measure).map(
-			(part) => `${DIM}│${RESET} ${part}`,
+			(part) => `${DIM}│${RESET} ${highlightCode(part, lang)}`,
 		)
 	}
 
@@ -270,12 +273,12 @@ export class MarkdownRenderer {
 				return [`${indent}${DIM}└─${RESET}`]
 			}
 			const body = line.slice(Math.min(open.indent, line.length - line.trimStart().length))
-			return this.codeLines(body, Math.max(1, columns - open.indent)).map(
+			return this.codeLines(body, Math.max(1, columns - open.indent), open.lang).map(
 				(row) => `${" ".repeat(open.indent)}${row}`,
 			)
 		}
 		if (fence) {
-			this.fence = { char: fence[2]![0]!, length: fence[2]!.length, indent: fence[1]!.length }
+			this.fence = { char: fence[2]![0]!, length: fence[2]!.length, indent: fence[1]!.length, lang: fence[3] ?? "" }
 			return [`${fence[1]}${DIM}┌─${fence[3] ? ` ${fence[3]}` : ""}${RESET}`]
 		}
 

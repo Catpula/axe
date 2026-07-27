@@ -30,7 +30,15 @@ import {
 } from "./color.ts"
 import { Editor, killWordStart, wordLeft, wordRight, type EditorEvent } from "./editor.ts"
 import { Decoder, PASTE_OFF, PASTE_ON, csiKey, decode, decodeChunk, type Key } from "./keys.ts"
-import { applyMention, fuzzyScore, matchFiles, mentionAt, quotePath, type Mention } from "./complete.ts"
+import {
+	applyMention,
+	fuzzyScore,
+	matchFiles,
+	mentionAt,
+	quotePath,
+	type Mention,
+} from "./complete.ts"
+import { moveIndex, scrollOffset } from "./list.ts"
 import { MarkdownRenderer } from "./markdown.ts"
 import { runEditor, type EditResult } from "./external-editor.ts"
 import { safeTerminalText } from "./terminal.ts"
@@ -251,13 +259,11 @@ export function promptView(buffer: string, cursor: number, width: number): { tex
 }
 
 /**
- * The command palette.
+ * The command palette, and the two ways in.
  *
- * axe has no slash commands and will not get any. A slash command is a second
- * language the user has to learn, invisible until they read the docs, and it
- * competes with the prompt for the same keystrokes. A palette is the opposite
- * trade: one key, discoverable by looking, and it cannot be typed by accident
- * in the middle of a sentence.
+ * Ctrl+O opens it, and so does typing `/` on an empty prompt — the muscle
+ * memory slash menus built, without the second command language: the palette
+ * runs entries without editing the prompt, and Esc leaves the prompt as it was.
  *
  * The palette is a UI affordance only. Nothing here is visible to the model,
  * and no palette entry may do something the user could not do by typing.
@@ -266,6 +272,7 @@ export type PaletteItem = {
 	id: string
 	title: string
 	hint?: string
+	group?: string
 	run: () => void | Promise<void>
 }
 
@@ -273,6 +280,8 @@ export class Palette {
 	open = false
 	query = ""
 	index = 0
+	/** When set, only items with this group are shown. */
+	groupFilter: string | null = null
 	private items: PaletteItem[] = []
 
 	/**
@@ -291,21 +300,29 @@ export class Palette {
 		this.index = at === -1 ? 0 : at
 	}
 
-	show(): void {
+	show(group?: string): void {
 		this.open = true
 		this.query = ""
 		this.index = 0
+		this.groupFilter = group ?? null
 	}
 
 	hide(): void {
 		this.open = false
 		this.query = ""
 		this.index = 0
+		this.groupFilter = null
 	}
 
 	matches(): PaletteItem[] {
-		if (!this.query.trim()) return this.items
-		return this.items
+		let filtered = this.items
+		if (this.groupFilter) {
+			filtered = filtered.filter((item) => item.group === this.groupFilter)
+		} else {
+			filtered = filtered.filter((item) => !item.group)
+		}
+		if (!this.query.trim()) return filtered
+		return filtered
 			.map((item) => ({ item, score: fuzzyScore(this.query, `${item.title} ${item.hint ?? ""}`) }))
 			.filter((x) => x.score >= 0)
 			.sort((a, b) => a.score - b.score)
@@ -317,8 +334,7 @@ export class Palette {
 	}
 
 	move(delta: number): void {
-		const n = this.matches().length
-		this.index = n ? (this.index + delta + n) % n : 0
+		this.index = moveIndex(this.index, delta, this.matches().length)
 	}
 
 	/** Home and End jump the list rather than the query, which is one row long. */
@@ -731,7 +747,7 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 		const width = cols()
 		const all = palette.matches()
 		// Keep the selection on screen when the list is longer than the window.
-		const offset = Math.max(0, Math.min(palette.index - h + 1, Math.max(0, all.length - h)))
+		const offset = scrollOffset(palette.index, h, all.length)
 		for (let i = 0; i < h; i++) {
 			const item = all[offset + i]
 			const row = rows() - 1 - h + i
@@ -740,7 +756,8 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 				continue
 			}
 			const selected = offset + i === palette.index
-			const label = paletteRow(item.title, item.hint, width, selected ? "\u203a " : "  ")
+			const title = palette.groupFilter ? item.title : `/${item.id}`
+			const label = paletteRow(title, item.hint, width, selected ? "\u203a " : "  ")
 			w(`${at(row, 1)}\x1b[2K${selected ? `${BOLD}${CYAN}` : DIM}${label}${RESET}`)
 		}
 		const empty = all.length === 0
@@ -759,7 +776,7 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 	const drawMention = () => {
 		const h = mentionHeight()
 		const width = cols()
-		const offset = Math.max(0, Math.min(mentionIndex - h + 1, Math.max(0, mentionHits.length - h)))
+		const offset = scrollOffset(mentionIndex, h, mentionHits.length)
 		for (let i = 0; i < h; i++) {
 			const path = mentionHits[offset + i]
 			const row = rows() - baseHeight() - h + 1 + i
@@ -981,8 +998,8 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 
 	// Opening and closing a list only changes what listHeight() answers; the
 	// rows and the scroll region are reconciled by the next drawBars.
-	const openPalette = () => {
-		palette.show()
+	const openPalette = (group?: string) => {
+		palette.show(group)
 		drawBars()
 	}
 
@@ -1051,11 +1068,11 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 	const handleMentionKey = (key: Key): boolean => {
 		switch (key.name) {
 			case "up":
-				mentionIndex = (mentionIndex - 1 + mentionHits.length) % mentionHits.length
+				mentionIndex = moveIndex(mentionIndex, -1, mentionHits.length)
 				drawBars()
 				return true
 			case "down":
-				mentionIndex = (mentionIndex + 1) % mentionHits.length
+				mentionIndex = moveIndex(mentionIndex, 1, mentionHits.length)
 				drawBars()
 				return true
 			case "tab":
@@ -1247,8 +1264,15 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 				return
 			case "enter": {
 				const item = palette.selected()
+				const isSlashPicker = !palette.groupFilter
 				closePalette()
-				if (item) void item.run()
+				if (item) {
+					if (isSlashPicker) {
+						const text = safeTerminalText(`/${item.id}`).replace(/\n/g, "\n  ")
+						line(`${CYAN}\u203a ${text}${RESET}`)
+					}
+					void item.run()
+				}
 				return
 			}
 			case "up":
@@ -1406,6 +1430,19 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 				continue
 			}
 			if (mention && handleMentionKey(key)) continue
+			// Ctrl+O opens the settings palette; `/` opens the command picker.
+			if (key.name === "palette") {
+				openPalette("settings")
+				continue
+			}
+			// Typing `/` on an empty prompt opens the palette — the muscle memory
+			// slash menus built, without a second command system behind it. The
+			// character is never typed, so Esc leaves the prompt exactly as it
+			// was; a pasted path is a paste event and sails through untouched.
+			if (key.name === "char" && key.text === "/" && !editor.buffer) {
+				openPalette()
+				continue
+			}
 			if (key.name === "paste-image") {
 				void pasteImage()
 				continue
@@ -1420,7 +1457,7 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 			if (ev.type === "submit") {
 				if (ev.line) {
 					const text = safeTerminalText(ev.line).replace(/\n/g, "\n  ")
-					line(`${DIM}\u203a ${text}${RESET}`)
+					line(`${CYAN}\u203a ${text}${RESET}`)
 					onLine(ev.line)
 				}
 			} else if (ev.type === "palette") {
@@ -1565,10 +1602,10 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 			}
 			drawBars()
 		},
-		// Ignored while the palette is on screen. The caller refreshes on a timer to
-		// keep the hints true, and `index` is a position in the filtered list: a
-		// rebuild that changes the item count moves the selection out from under the
-		// user, so Enter runs a command they were not looking at.
+		// Ignored while a picker is on screen. The caller refreshes on a timer to
+		// keep the hints true, and the index is a position in the filtered list: a
+		// rebuild that changes the item count moves the selection out from under
+		// the user, so Enter runs a command they were not looking at.
 		setCommands: (items) => {
 			if (!palette.open) palette.setItems(items)
 		},

@@ -44,6 +44,9 @@ import {
 	mentionAt,
 	quotePath,
 } from "../src/ui/complete.ts"
+import { moveIndex, scrollOffset } from "../src/ui/list.ts"
+import { highlightCode, highlightDiffLine } from "../src/ui/syntax.ts"
+import { CYAN, DIM, GREEN, MAGENTA, RED, RESET } from "../src/ui/color.ts"
 import {
 	MarkdownRenderer,
 	renderInlineMarkdown,
@@ -373,6 +376,14 @@ const midLine = applyMention("@cl and more", 3, { from: 0, query: "cl" }, "src/c
 check("accepting keeps the rest of the line", midLine.buffer === "src/cli.ts  and more", midLine.buffer)
 check("the cursor lands after the inserted path", midLine.cursor === 11, String(midLine.cursor))
 
+// Shared list arithmetic: every picker wraps and scrolls the same way.
+check("the selection wraps forward", moveIndex(2, 1, 3) === 0)
+check("the selection wraps backward", moveIndex(0, -1, 3) === 2)
+check("an empty list pins at zero", moveIndex(0, 1, 0) === 0)
+check("scrolling keeps the selection visible", scrollOffset(5, 3, 10) === 3)
+check("scrolling stops at the last page", scrollOffset(9, 3, 10) === 7)
+check("a list that fits does not scroll", scrollOffset(2, 5, 4) === 0)
+
 // The palette.
 let ran: string[] = []
 const item = (id: string, title: string, hint?: string): PaletteItem => ({
@@ -452,6 +463,21 @@ p.move(2)
 p.type("e")
 check("typing resets the cursor", p.index === 0)
 
+// Syntax highlighting adds SGR runs and never changes a character.
+const stripSgr = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "")
+check("highlighting preserves the characters", stripSgr(highlightCode("const x = 'hi' // done", "ts")) === "const x = 'hi' // done")
+check("keywords go magenta", highlightCode("return", "ts") === `${MAGENTA}return${RESET}`)
+check("strings go green", highlightCode("'hi'", "py") === `${GREEN}'hi'${RESET}`)
+check("comments run to the end of the line", highlightCode("x # note", "py") === `x ${DIM}# note${RESET}`)
+check("numbers go cyan", highlightCode("42", "go") === `${CYAN}42${RESET}`)
+check("an unknown language is left alone", highlightCode("const x = 1", "brainfuck") === "const x = 1")
+check("diff additions go green", highlightDiffLine("+one") === `${GREEN}+one${RESET}`)
+check("diff removals go red", highlightDiffLine("-one") === `${RED}-one${RESET}`)
+check("diff hunk headers go cyan", highlightDiffLine("@@ -1 +1 @@") === `${CYAN}@@ -1 +1 @@${RESET}`)
+check("diff file headers dim", highlightDiffLine("--- a/x") === `${DIM}--- a/x${RESET}`)
+check("diff context stays plain", highlightDiffLine(" unchanged") === " unchanged")
+check("a diff fence routes to the diff colours", highlightCode("+added", "diff") === `${GREEN}+added${RESET}`)
+
 // Wrapping.
 check("wraps at a word boundary", wrap("aaa bbb ccc", 7).join("|") === "aaa bbb|ccc")
 check("hard cuts a long word", wrap("aaaaaaaaaa", 4).join("|") === "aaaa|aaaa|aa")
@@ -495,6 +521,11 @@ check("markdown renders ordered lists", ansi(md.push("  12. twelve\n", 80)) === 
 check("markdown renders tasks", ansi(md.push("- [x] shipped\n", 80)) === "☑ shipped\n")
 check("markdown renders quotes", ansi(md.push("> note\n", 80)) === "│ note\n")
 check("markdown opens code fences", ansi(md.push("```ts\nconst x = 1\n```\n", 80)) === "┌─ ts\n│ const x = 1\n└─\n")
+const highlightedFence = new MarkdownRenderer(displayWidth)
+check(
+	"code fences highlight by language",
+	highlightedFence.push("```ts\nreturn\n```\n", 80).includes(`${MAGENTA}return${RESET}`),
+)
 const wrappedCode = new MarkdownRenderer(displayWidth)
 check(
 	"markdown keeps a gutter on wrapped code",
