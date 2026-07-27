@@ -1,11 +1,11 @@
 // Exercises the agent loop invariants against a scripted provider.
 // No API key, no network.
+import { mkdtempSync } from "node:fs"
 import { appendFile, mkdtemp, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { newSession, runTurn, type UI } from "../src/core/loop.ts"
-import { InputQueue } from "../src/core/queue.ts"
-import { ToolRegistry, execTool } from "../src/core/tools.ts"
+import type { UI } from "../src/core/loop.ts"
+import type { InputQueue as InputQueueType } from "../src/core/queue.ts"
 import type {
 	Block,
 	Message,
@@ -14,7 +14,16 @@ import type {
 	StreamEvent,
 	ToolDef,
 } from "../src/providers/types.ts"
-import { jsonError, jsonResult, makeJsonUI } from "../src/ui/json.ts"
+
+// AXE_HOME is read when thread.ts is loaded, so it has to be set before the
+// first import that reaches it. A static import would have run first.
+const home = mkdtempSync(join(tmpdir(), "axe-threads-"))
+process.env.AXE_HOME = home
+
+const { newSession, runTurn } = await import("../src/core/loop.ts")
+const { InputQueue } = await import("../src/core/queue.ts")
+const { ToolRegistry, execTool } = await import("../src/core/tools.ts")
+const { jsonError, jsonResult, makeJsonUI } = await import("../src/ui/json.ts")
 
 let failures = 0
 
@@ -73,7 +82,7 @@ const ui: UI = {
 	notice: (s) => notices.push(s),
 }
 
-function session(turns: Block[][], opts: { queue?: InputQueue; maxSteps?: number } = {}) {
+function session(turns: Block[][], opts: { queue?: InputQueueType; maxSteps?: number } = {}) {
 	const s = newSession({
 		provider: scripted(turns),
 		model: "scripted",
@@ -538,8 +547,6 @@ function unanswered(messages: Message[]): string[] {
 // The thread store. A transcript is nobody else's business, and a thread
 // belongs to the directory it was started in.
 {
-	const home = await mkdtemp(join(tmpdir(), "axe-threads-"))
-	process.env.AXE_HOME = home
 	const { Thread } = await import("../src/core/thread.ts")
 
 	const a = await Thread.create("/tmp/axe-project-a")
