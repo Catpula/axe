@@ -139,11 +139,13 @@ const tui = makeTui("model · $0.00", {
 	queued: () => queued,
 })
 let slashRan = false
+let receivedLine: string | null = null
 tui.setCommands([
 	{ id: "cost", title: "Show cost so far", run: () => { slashRan = true } },
 	{ id: "a", title: "Effort: low", group: "settings", run: () => {} },
 	{ id: "b", title: "Effort: high", group: "settings", run: () => {} },
 ])
+tui.onLine((line) => { receivedLine = line })
 await tick()
 check("an empty composer has a visible prompt", screen.line(24).includes("› Message axe…"), screen.dump())
 key("x")
@@ -210,6 +212,17 @@ await tick()
 check("enter runs the slash command", slashRan, screen.dump())
 check("running a slash command clears the composer", !screen.line(24).includes("/cos"), screen.dump())
 check("the run is echoed to the transcript", screen.dump().includes("› /cost"), screen.dump())
+
+// A slash query with no match is sent as a prompt, not swallowed.
+receivedLine = null
+key("/zzzz something")
+await tick()
+check("no match shows the empty state", screen.dump().includes("no match"), screen.dump())
+key("\r")
+await tick()
+check("enter on no match sends the line as a prompt", receivedLine === "/zzzz something", `${receivedLine}`)
+check("the unmatched query is echoed to the transcript", screen.dump().includes("› /zzzz something"), screen.dump())
+check("the composer is cleared after no-match enter", !screen.line(24).includes("zzzz"), screen.dump())
 
 // `@` outranks the panel too.
 key("@cli")
