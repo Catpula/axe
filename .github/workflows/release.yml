@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+      - run: npm ci
+
+      # The tag is the only source of truth for what is being released, and the
+      # binary carries src/version.ts. A release where the two disagree ships a
+      # binary that lies to `axe update`.
+      - name: Tag matches src/version.ts
+        run: |
+          version=$(sed -n 's/.*VERSION = "\([^"]*\)".*/\1/p' src/version.ts | head -n1)
+          if [ -z "$version" ]; then
+            echo "Could not read VERSION from src/version.ts."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match v$version from src/version.ts."
+            exit 1
+          fi
+
+      - run: npm test
+      - run: npm run release
+
+      # dist/* carries SHA256SUMS, and `axe update` installs nothing that is not
+      # listed in it. Uploading the binaries without it makes them uninstallable.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
