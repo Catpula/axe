@@ -88,6 +88,10 @@ async function fromRoot(root: string, scope: SkillScope): Promise<Skill[]> {
 		return []
 	}
 	const found: Skill[] = []
+	// By filename, for the same reason discoverAgents sorts: two entries can slug
+	// to one name, and readdir order is the filesystem's business. Unsorted, the
+	// same checkout resolves a collision one way on ext4 and another elsewhere.
+	entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
 	for (const e of entries) {
 		if (e.isDirectory()) {
 			const s = await readSkill(join(root, e.name, "SKILL.md"), scope, e.name)

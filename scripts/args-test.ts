@@ -91,6 +91,10 @@ check("tools keeps its positionals", parseArgs(["tools", "show", "read_file"]).c
 check("skill keeps its source", parseArgs(["skill", "add", "o/r"]).commandArgs.join(" ") === "add o/r")
 check("tools swallows the rest of the line", parseArgs(["tools", "--anything"]).commandArgs.join(" ") === "--anything")
 check("mcp reads its subcommand as a prompt", parseArgs(["mcp", "approve", "x"]).prompt === "approve x")
+check(
+	"permissions keeps its test arguments",
+	parseArgs(["permissions", "test", "bash", '{"cmd":"npm test"}']).prompt === 'test bash {"cmd":"npm test"}',
+)
 
 // A schedule's prompt is its own positional: joining it into args.prompt would
 // send it to the model instead of storing it, and quoting it would be lost.

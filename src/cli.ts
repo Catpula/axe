@@ -20,6 +20,7 @@ import { debugRequested, initDebugLog } from "./debuglog.ts"
 import { doctorFailed, formatDoctor, runDoctor } from "./doctor.ts"
 import { classify, describeError, formatDiagnosis } from "./errors.ts"
 import { discoverAgents } from "./core/agents.ts"
+import { discoverCommands, expandCommand, parseCommandLine } from "./core/commands.ts"
 import type { CompactionConfig } from "./core/compact.ts"
 import { newSession, runTurn, type UI } from "./core/loop.ts"
 import { ApprovalQueue, type ApprovalDecision } from "./core/tools.ts"
@@ -87,6 +88,7 @@ Usage
 Commands
   threads                    list thread ids, newest first
   skills                     playbooks visible in this directory
+  commands                   slash commands visible in this directory
   tools [show <name>]        tools this setup exposes
   skill add <owner/repo>     install a skill from GitHub
   auth                       which providers have a usable key
@@ -211,6 +213,19 @@ async function main() {
 		}
 		for (const s of found) {
 			stdout.write(`${s.name.padEnd(24)}${s.scope.padEnd(10)}${s.description}\n`)
+		}
+		return
+	}
+	if (args.command === "commands") {
+		const found = await discoverCommands(cwd)
+		if (!found.length) {
+			stdout.write(
+				"No slash commands. Add one at .agents/commands/<name>.md — the body is the prompt, $ARGUMENTS is what you type after the name.\n",
+			)
+			return
+		}
+		for (const c of found) {
+			stdout.write(`${`/${c.name}`.padEnd(24)}${c.scope.padEnd(10)}${c.description}\n`)
 		}
 		return
 	}
@@ -371,20 +386,21 @@ async function main() {
 			process.exitCode = 1
 			return
 		}
+		const rl = createInterface({ input: stdin, output: stdout })
 		try {
-			const rl = createInterface({ input: stdin, output: stdout })
 			const result = await installSkill(cwd, source, {
 				confirmOverwrite: async (path) => {
 					const answer = await rl.question(`${path} already exists. Overwrite? [y/N] `)
 					return /^y(es)?$/i.test(answer.trim())
 				},
 			})
-			rl.close()
 			for (const n of result.notes) process.stderr.write(`${n}\n`)
 			stdout.write(`Installed ${result.name} at ${result.path}\n`)
 		} catch (err) {
 			process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`)
 			process.exitCode = 1
+		} finally {
+			rl.close()
 		}
 		return
 	}
@@ -491,6 +507,10 @@ async function main() {
 	})
 	// Custom subagent roles cost one line of the task tool's description each.
 	const agents = await discoverAgents(cwd)
+	// Slash commands are prompts the user got tired of retyping. They cost no
+	// context: nothing about them reaches the model until one is run, and then
+	// only the expanded text does.
+	let customCommands = await discoverCommands(cwd)
 
 	// Subagents are spawned by the model, so the ceiling is config, not judgement.
 	const gate = new Gate(cfg.maxParallelSubagents)
@@ -968,6 +988,13 @@ async function main() {
 			return
 		}
 		if (!input) return
+		// A slash line is a command or a mistake, never a prompt: sending
+		// `/depoly staging` to the model would spend a turn on a typo.
+		const slash = parseCommandLine(input)
+		if (slash) {
+			void runCustomCommand(slash.name, slash.args)
+			return
+		}
 		if (input === "exit" || input === "quit") {
 			quit()
 			return
@@ -997,11 +1024,63 @@ async function main() {
 	}
 
 	/**
+	 * Runs `/name args`.
+	 *
+	 * Re-reads the directories on every call, so a command edited or written
+	 * during the session works without a restart — two readdirs against a
+	 * keystroke, which is cheaper than explaining why the file is being ignored.
+	 * The expansion is sent as an ordinary user turn: the model sees the text and
+	 * nothing about where it came from.
+	 */
+	const runCustomCommand = async (name: string, args: string): Promise<void> => {
+		try {
+			customCommands = await discoverCommands(cwd)
+		} catch {
+			// Keep the list we had. A transient read error should not lose the command.
+		}
+		// The picker shows built-ins as `/abort`, `/cost`, and so on, so typing what
+		// it displayed has to work. Checked first: a file named clear.md must not
+		// take `/clear` away from the session that owns the screen.
+		const builtin = builtins().find((c) => c.id === name)
+		if (builtin) {
+			// Said out loud, because the picker lists the file with its own
+			// description: without this the file looks like it ran and quietly did
+			// something else. Renaming it is the fix, and the path is here to rename.
+			const shadowed = customCommands.find((c) => c.name === name)
+			if (shadowed) session.ui.notice(`/${name} is built in. ${shadowed.path} is not used — rename it.`)
+			void builtin.run()
+			return
+		}
+		const found = customCommands.find((c) => c.name === name)
+		if (!found) {
+			const known = [...customCommands.map((c) => `/${c.name}`), "/help"].join(", ")
+			session.ui.notice(`No command /${name}. Available: ${known}`)
+			return
+		}
+		const prompt = expandCommand(found.template, args)
+		if (!prompt.trim()) {
+			session.ui.notice(`/${name} expanded to nothing. Check ${found.path}`)
+			return
+		}
+		if (active) {
+			queue.push(prompt)
+			session.ui.notice("Queued. Lands at the next step boundary.")
+			return
+		}
+		tui?.setWorking(true)
+		active = runUntilQuiet(prompt).finally(() => {
+			active = null
+			tui?.setWorking(false)
+			tui?.setStatus(status())
+		})
+	}
+
+	/**
 	 * Palette entries are shortcuts, never new powers: everything here is
 	 * something the user could already do by typing or by pressing a key. The
 	 * palette exists so they do not have to remember which.
 	 */
-	const commands = (): PaletteItem[] => [
+	const builtins = (): PaletteItem[] => [
 		{
 			id: "abort",
 			title: "Abort the current turn",
@@ -1114,12 +1193,84 @@ async function main() {
 				}
 			},
 		})),
+		{
+			id: "help",
+			title: "List slash commands",
+			hint: `${customCommands.length} from files`,
+			run: () => {
+				const lines = customCommands.map(
+					(c) => `/${c.name} · ${c.description || c.scope}`,
+				)
+				session.ui.notice(
+					lines.length
+						? lines.join("\n")
+						: "No commands from files. Add one at .agents/commands/<name>.md",
+				)
+			},
+		},
 		{ id: "exit", title: "Exit", hint: "Ctrl+D", run: quit },
 	]
 
+	/**
+	 * The built-ins, then the user's own files.
+	 *
+	 * A file whose name a built-in owns is left out rather than listed. Two rows
+	 * with the same id is a row that cannot be selected — setItems re-anchors on
+	 * id — and the name resolves to the built-in anyway, so listing it would
+	 * promise the file's description and then run something else. Typing the name
+	 * says so out loud; see runCustomCommand.
+	 */
+	const commands = (): PaletteItem[] => {
+		const base = builtins()
+		const taken = new Set(base.map((c) => c.id))
+		return [
+			...base,
+			// Listed last and named by its scope. Enter types `/name ` rather than
+			// running it: most of these want a subject, and running one with empty
+			// arguments is the wrong default for a prompt.
+			...customCommands
+				.filter((c) => !taken.has(c.name))
+				.map((c) => ({
+					id: c.name,
+					title: `/${c.name}`,
+					hint: c.description || `${c.scope} command`,
+					takesArgs: true,
+					run: () => runCustomCommand(c.name, ""),
+				})),
+		]
+	}
+
+	/**
+	 * The non-interactive half of the slash commands.
+	 *
+	 * `axe -x /recap src` has to mean what `/recap src` means in the session, or
+	 * the commands are a TUI feature and every script has to inline the prompt by
+	 * hand. Text that is not a command line is returned unchanged, so a caller
+	 * can put this in front of every turn. A name no file defines is an error
+	 * rather than a turn: sending `/depoly staging` to the model spends a request
+	 * on a typo, and the caller has no picker to have caught it.
+	 */
+	const expandSlash = (input: string): { text: string } | { error: string } => {
+		const slash = parseCommandLine(input)
+		if (!slash) return { text: input }
+		const found = customCommands.find((c) => c.name === slash.name)
+		if (!found) return { error: `No command /${slash.name}. Try \`axe commands\`.` }
+		const prompt = expandCommand(found.template, slash.args)
+		if (!prompt.trim()) return { error: `/${slash.name} expanded to nothing. Check ${found.path}` }
+		return { text: prompt }
+	}
+
 	// One-shot mode: axe -x "fix the failing test"
 	if (oneShot !== null) {
-		await turn(oneShot)
+		const expanded = expandSlash(oneShot)
+		if ("error" in expanded) {
+			// A machine-readable run says it in the stream it is being read from.
+			if (args.streamJson) stdout.write(jsonError(expanded.error))
+			else process.stderr.write(`${expanded.error}\n`)
+			process.exitCode = 1
+			return
+		}
+		await turn(expanded.text)
 		if (args.streamJson) stdout.write(jsonResult(session.usage, thread.id))
 		if (turnFailed) process.exitCode = 1
 		return
@@ -1143,7 +1294,16 @@ async function main() {
 				stdout.write(jsonError(`bad stream-json-input line: ${err instanceof Error ? err.message : String(err)}`))
 				continue
 			}
-			await turn(text)
+			// The same expansion as -x. A bad name is one bad line, never the end of
+			// the stream: the caller is still feeding turns and the next one may be
+			// fine.
+			const expanded = expandSlash(text)
+			if ("error" in expanded) {
+				stdout.write(jsonError(expanded.error))
+				process.exitCode = 1
+				continue
+			}
+			await turn(expanded.text)
 			stdout.write(jsonResult(session.usage, thread.id))
 		}
 		if (turnFailed) process.exitCode = 1
@@ -1161,6 +1321,13 @@ async function main() {
 		// The hints and the status bar both quote live numbers: cost climbs during
 		// a turn, and a stale bar is worse than no bar.
 		const refresh = setInterval(() => {
+			// Rediscovered here too, so a command file written during the session
+			// shows up in the picker and not only when someone types its name.
+			void discoverCommands(cwd)
+				.then((found) => {
+					customCommands = found
+				})
+				.catch(() => {})
 			tui.setCommands(commands())
 			tui.setStatus(status())
 		}, 2_000)

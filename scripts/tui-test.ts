@@ -463,6 +463,35 @@ p.move(2)
 p.type("e")
 check("typing resets the cursor", p.index === 0)
 
+// A rebuild lands on a timer while the palette is open, so the selection follows
+// the command rather than the row number.
+p.clear()
+p.first()
+p.move(2)
+const beforeRebuild = p.selected()?.id
+p.setItems([item("new-one", "Added since"), ...p.matches()])
+check("a rebuild keeps the same command selected", p.selected()?.id === beforeRebuild, `${beforeRebuild} -> ${p.selected()?.id}`)
+
+// Which is why two rows may not share an id. The second row can be moved to,
+// but re-anchoring matches on id and finds the first, so the next rebuild — one
+// lands every two seconds — drags the selection off it. cli.ts drops a command
+// file whose name a built-in owns for this reason.
+const dup = () => [item("dup", "Built-in row"), item("dup", "File row")]
+p.setItems(dup())
+p.clear()
+p.last()
+check("a duplicate row can be moved to", p.selected()?.title === "File row", String(p.selected()?.title))
+p.setItems(dup())
+check("but a rebuild drags the selection off it", p.selected()?.title === "Built-in row", String(p.selected()?.title))
+p.setItems([
+	item("abort", "Abort the current turn", "Esc Esc"),
+	item("cost", "Show cost so far"),
+	item("effort-low", "Effort: low"),
+	item("effort-ultra", "Effort: ultra"),
+	item("exit", "Exit", "Ctrl+D"),
+])
+p.hide()
+
 // Syntax highlighting adds SGR runs and never changes a character.
 const stripSgr = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "")
 check("highlighting preserves the characters", stripSgr(highlightCode("const x = 'hi' // done", "ts")) === "const x = 'hi' // done")

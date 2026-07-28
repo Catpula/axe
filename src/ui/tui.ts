@@ -273,6 +273,12 @@ export type PaletteItem = {
 	title: string
 	hint?: string
 	group?: string
+	/**
+	 * Enter writes `/<id> ` into the prompt instead of running the entry, because
+	 * an entry that reads its arguments has nothing to do until they are typed.
+	 * Submitting that line reaches the same handler, so the two routes agree.
+	 */
+	takesArgs?: boolean
 	run: () => void | Promise<void>
 }
 
@@ -1251,6 +1257,17 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 			})
 	}
 
+	/**
+	 * Puts `/name ` in the prompt so the user can type arguments after it.
+	 *
+	 * The prompt was empty when `/` opened the picker, so there is nothing to
+	 * preserve and the cursor belongs at the end.
+	 */
+	const typeCommand = (id: string): void => {
+		editor.setBuffer(`/${id} `)
+		syncMention()
+	}
+
 	const handlePaletteKey = (key: Key): void => {
 		switch (key.name) {
 			case "escape":
@@ -1269,6 +1286,10 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 				const isSlashPicker = !palette.groupFilter
 				closePalette()
 				if (item) {
+					if (item.takesArgs) {
+						typeCommand(item.id)
+						return
+					}
 					if (isSlashPicker) {
 						const text = safeTerminalText(`/${item.id}`).replace(/\n/g, "\n  ")
 						line(`${CYAN}\u203a ${text}${RESET}`)
@@ -1305,9 +1326,27 @@ export function makeTui(status: string, opts: TuiOptions = {}): Tui {
 			case "kill-tail":
 				palette.clear()
 				return
-			case "char":
-				palette.type(key.text ?? "")
+			case "char": {
+				// Space ends the name and starts the arguments, the way it does in a
+				// shell. Without this, typing `/commit src/cli.ts` straight through
+				// put the whole thing in the filter, matched nothing, and Enter did
+				// nothing — the picker swallowed a line the user meant to send.
+				if (key.text !== " " || palette.groupFilter || !palette.query.trim()) {
+					palette.type(key.text ?? "")
+					return
+				}
+				// Read before closing, because hiding clears the filter.
+				const typed = palette.query.trim()
+				const item = palette.selected()
+				closePalette()
+				// A filter matching nothing is a name we do not have, and the picker
+				// is the wrong place to find that out: it has no row to select, so
+				// Enter would do nothing and the line would die on screen. Handing the
+				// text back means the same `/word` reaches handleLine, which says which
+				// commands exist.
+				typeCommand(item ? item.id : typed)
 				return
+			}
 			case "paste":
 				// A filter is one line. Newlines in a pasted query would match nothing.
 				palette.type((key.text ?? "").replace(/\s+/g, " ").trim())

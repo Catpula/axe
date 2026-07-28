@@ -39,10 +39,10 @@ export type Args = {
 }
 
 /** Commands that take positionals of their own, so a stray word is theirs to judge. */
-const WITH_ARGS = new Set(["tools", "skill", "mcp", "schedule"])
+const WITH_ARGS = new Set(["tools", "skill", "mcp", "schedule", "permissions"])
 
 /** Commands whose whole input is the word itself. `update` takes only `--check`. */
-const ARGLESS = new Set(["threads", "skills", "auth", "permissions", "review", "update", "version", "help", "cost", "schedules", "doctor"])
+const ARGLESS = new Set(["threads", "skills", "commands", "auth", "review", "update", "version", "help", "cost", "schedules", "doctor"])
 
 const COMMANDS = new Set([...WITH_ARGS, ...ARGLESS])
 

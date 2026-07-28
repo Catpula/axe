@@ -139,8 +139,13 @@ const tui = makeTui("model · $0.00", {
 	queued: () => queued,
 })
 let slashRan = false
+let argsRan = false
+/** What the session would have been asked to run. */
+const lines: string[] = []
+tui.onLine((l) => lines.push(l))
 tui.setCommands([
 	{ id: "cost", title: "Show cost so far", run: () => { slashRan = true } },
+	{ id: "greet", title: "/greet", hint: "project command", takesArgs: true, run: () => { argsRan = true } },
 	{ id: "a", title: "Effort: low", group: "settings", run: () => {} },
 	{ id: "b", title: "Effort: high", group: "settings", run: () => {} },
 ])
@@ -210,6 +215,42 @@ await tick()
 check("enter runs the slash command", slashRan, screen.dump())
 check("running a slash command clears the composer", !screen.line(24).includes("/cos"), screen.dump())
 check("the run is echoed to the transcript", screen.dump().includes("› /cost"), screen.dump())
+
+// A command that takes arguments is typed into the prompt rather than run, so
+// there is somewhere to put them. Enter picks it, and so does a space: typing
+// `/greet Ada` straight through used to leave the whole line in the filter,
+// match nothing, and swallow the line on Enter.
+key("/greet")
+await tick()
+check("an argument command is offered", above(7).some((l) => l.includes("/greet")), screen.dump())
+key("\r")
+await tick()
+check("enter types it instead of running it", screen.line(24).includes("/greet") && !argsRan, screen.dump())
+// A trailing space is invisible on a grid, so it is proved by typing after it:
+// without one the next word would land against the name.
+key("Ada")
+await tick()
+check("the name is left ready for arguments", screen.line(24).includes("/greet Ada"), screen.dump())
+for (let i = 0; i < 12; i++) key("\x7f")
+await tick()
+key("/gre Ada")
+await tick()
+check("a space picks the match and keeps typing", screen.line(24).includes("/greet Ada"), screen.dump())
+check("and does not run it", !argsRan, screen.dump())
+for (let i = 0; i < 12; i++) key("\x7f")
+await tick()
+
+// A filter matching nothing has no row to pick, so the same line must still
+// reach the prompt rather than dying in the picker: space with no match closes
+// it and hands the typing back.
+lines.length = 0
+key("/nope and more")
+await tick()
+check("a filter with no match leaves the picker", !above(7).some((l) => l.includes("Show cost")), screen.dump())
+check("and the line is in the composer", screen.line(24).includes("/nope and more"), screen.dump())
+key("\r")
+await tick()
+check("and enter sends it", lines.at(-1) === "/nope and more", JSON.stringify(lines))
 
 // `@` outranks the panel too.
 key("@cli")

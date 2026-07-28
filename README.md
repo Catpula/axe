@@ -62,6 +62,7 @@ axe doctor                  # config, keys, route, bash, plugins and MCP on one 
 axe auth                    # which providers have a usable key
 axe threads                 # thread ids, newest first
 axe skills                  # playbooks visible here
+axe commands                # slash commands visible here
 axe skill add <owner/repo>  # install a skill from GitHub
 axe tools [show <name>]     # what this setup exposes, plugins and MCP included
 axe permissions [test ...]  # rules in effect, and what they would decide
@@ -131,15 +132,45 @@ Line editing follows readline, including the control aliases (`Ctrl+B`, `Ctrl+F`
 
 `Ctrl+O` opens a filtered list above the prompt: abort the turn, show cost, show context size, inspect context sources, review changes from the latest turn, switch effort, switch subagent trace, list skills, list tools, list recent threads, exit.
 
-Every entry is a shortcut for something you could already do by typing or by pressing a key. The palette is not an API: nothing in it is visible to the model, and no entry grants a power the prompt does not have.
+Every built-in entry is a shortcut for something you could already do by typing or by pressing a key. None of them is visible to the model, and none grants a power the prompt does not have.
 
-There are no slash commands, deliberately. A slash command is a second language, invisible until you read the docs, and it makes every message beginning with `/` ambiguous. One key that shows the whole list is a better trade.
+Typing `/` on an empty prompt opens the same list, plus your own commands from files. `Up`/`Down` choose, `Esc` leaves the prompt exactly as it was — the `/` is never typed into it.
 
 ### File references
 
 Typing `@` at the start of a word opens a list of files, filtered as you keep typing. `Up`/`Down` choose, `Tab` or `Enter` inserts the path, `Esc` leaves what you typed alone. A path containing a space is inserted quoted.
 
-What lands in the prompt is a path you could have typed by hand. The model sees no annotation, no attached contents, and no new tool: it reads the file with `read_file`. This is a typing aid, which is why it exists while slash commands do not.
+What lands in the prompt is a path you could have typed by hand. The model sees no annotation, no attached contents, and no new tool: it reads the file with `read_file`. It is a typing aid, nothing more.
+
+## Slash commands
+
+A slash command is a prompt you got tired of retyping. Put one at `.agents/commands/<name>.md` in a project, or `~/.agents/commands/<name>.md` for every project.
+
+```markdown
+---
+description: Review a file against our conventions
+---
+
+Read $1 and review it against AGENTS.md. Report findings only, do not edit.
+```
+
+Then `/review-file src/cli.ts` in the REPL. The body becomes your turn:
+
+- `$ARGUMENTS` is everything you typed after the name.
+- `$1`..`$9` are its words.
+- A template with neither placeholder takes the arguments appended on their own line, so a command written without them still accepts a subject.
+
+Substitution is one pass, so an argument that itself contains `$2` stays text.
+
+The expansion is sent as an ordinary user turn. The model sees the text and nothing about where it came from — no marker, no new tool, nothing you could not have typed by hand. That is the whole feature: files are for your fingers, skills are for the model's judgement.
+
+`axe commands` lists what is visible here. The directories are re-read on every call, so a command you just wrote works without a restart. A project command overrides a personal one with the same name. A file with an empty body is ignored, because an empty turn reads as a hung session. `README.md` and non-markdown files are skipped, and subdirectories are not searched.
+
+Typing `/` opens the picker; typing a space after a name that matches sends the rest to the prompt as arguments, the way it does in a shell. An unknown `/word` is reported rather than sent, so a typo never costs a turn.
+
+`axe -x "/review-file src/cli.ts"` runs the same expansion from a script, so a command is not a TUI-only feature. An unknown one exits 1 without making a request.
+
+A built-in keeps its own name: a file called `clear.md` cannot take `/clear` away from the session that owns the screen. Such a file is left out of the picker rather than listed under a name that would run something else, and typing the name says which file is being ignored so you can rename it.
 
 ## Skills
 
@@ -465,7 +496,7 @@ axe --stream-json "which tests are flaky" | jq -r 'select(.type=="text") | .text
 
 Ignore types you do not recognise. New event types will be added; existing ones will not change shape. A subagent produces no events of its own — it surfaces as one `tool_start` / `tool_end` pair for `task`. `thinking` events are off unless `--stream-json-thinking` asks for them.
 
-`--stream-json-input` reads NDJSON from stdin instead of a single prompt: one `{"type":"user","text":"..."}` line per turn, one `result` line back. A line that is not that shape produces an `error` event and is skipped, not a crash.
+`--stream-json-input` reads NDJSON from stdin instead of a single prompt: one `{"type":"user","text":"..."}` line per turn, one `result` line back. A line that is not that shape produces an `error` event and is skipped, not a crash. A `text` that is a slash command is expanded like it would be in the REPL; a name no file defines is an `error` event and one skipped line, so the next turn still runs.
 
 Exit codes, because a script reads those and not the prose:
 
@@ -522,6 +553,7 @@ src/core/compact.ts        context compaction
 src/core/queue.ts          input queued during a turn
 src/core/permissions.ts    allow / deny / ask rule matching
 src/core/skills.ts         markdown playbook discovery
+src/core/commands.ts       markdown slash commands, placeholder expansion
 src/core/skill-install.ts  `axe skill add`, tarball to .agents/skills
 src/core/agents.ts         markdown custom subagent roles
 src/core/plugins.ts        third-party tool loading
@@ -568,6 +600,7 @@ npm test
 | `adapter-test` | all three adapters against recorded SSE frames |
 | `subagent-test` | context isolation, usage roll-up, the gate, read-only tools |
 | `skills-test` | frontmatter, discovery order, project overrides, prompt section |
+| `commands-test` | slash command parsing, placeholder expansion, discovery, `axe commands` |
 | `skill-add-test` | source parsing, tarball install, overwrite refusal |
 | `skill-mcp-test` | a skill's MCP server declaration |
 | `agents-test` | custom role discovery, overrides, reserved names, task routing |

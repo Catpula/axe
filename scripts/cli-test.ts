@@ -32,6 +32,9 @@ type Options = {
 	home: string
 	env?: Record<string, string>
 	input?: string
+	/** Leaves the pipe open like a TTY, so a readline nobody closed still hangs. */
+	holdStdin?: boolean
+	timeoutMs?: number
 }
 
 function runAxe(args: string[], opts: Options): Promise<Run> {
@@ -53,8 +56,9 @@ function runAxe(args: string[], opts: Options): Promise<Run> {
 		child.stderr.setEncoding("utf8")
 		child.stdout.on("data", (d: string) => (stdout += d))
 		child.stderr.on("data", (d: string) => (stderr += d))
-		child.stdin.end(opts.input ?? "")
-		const kill = setTimeout(() => child.kill("SIGKILL"), 60_000)
+		if (opts.holdStdin) child.stdin.write(opts.input ?? "")
+		else child.stdin.end(opts.input ?? "")
+		const kill = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 60_000)
 		child.on("close", (code) => {
 			clearTimeout(kill)
 			resolve({ code: code ?? -1, stdout, stderr })
@@ -110,14 +114,14 @@ for (const flag of [...new Set(helpFlags)]) {
 
 // Every command word the help lists must be one the parser routes, i.e. must
 // not fall through to the REPL and hang waiting on stdin.
-for (const cmd of ["threads", "skills", "tools", "auth", "permissions", "mcp", "review", "version", "doctor"]) {
+for (const cmd of ["threads", "skills", "commands", "tools", "auth", "permissions", "mcp", "review", "version", "doctor"]) {
 	const r = await runAxe([cmd], plain)
 	check(`${cmd} returns without a session`, r.code === 0 || r.code === 1, `code ${r.code}`)
 }
 
 // A command that takes no arguments used to ignore whatever followed it, so
 // `axe threads --json` did the bare thing and reported success.
-for (const [cmd, extra] of [["threads", "extra"], ["skills", "foo"], ["auth", "bogus"], ["doctor", "verbose"]]) {
+for (const [cmd, extra] of [["threads", "extra"], ["skills", "foo"], ["commands", "deploy"], ["auth", "bogus"], ["doctor", "verbose"]]) {
 	const r = await runAxe([cmd!, extra!], plain)
 	check(`${cmd} rejects a stray argument`, r.code === 1, `code ${r.code}`)
 	check(`and names it`, r.stderr.includes(extra!), r.stderr)
@@ -127,6 +131,17 @@ const withArgs = await runAxe(["tools", "show", "read_file"], plain)
 check("tools show still takes its name", withArgs.code === 0 && withArgs.stdout.includes("read_file"), withArgs.stdout)
 const mcpList = await runAxe(["mcp", "list"], plain)
 check("mcp list still takes its subcommand", mcpList.code === 0, `code ${mcpList.code}`)
+const permissionTest = await runAxe(["permissions", "test", "bash", '{"cmd":"npm test"}'], plain)
+check("permissions test exits 0", permissionTest.code === 0, `code ${permissionTest.code}`)
+check("permissions test reports its decision", permissionTest.stdout.trim() === "allow", permissionTest.stdout)
+// stdin stays open on purpose: this is a TTY in the real thing, and a readline
+// left holding an open stdin is what used to keep the process alive after the
+// error was printed. Closing stdin here would end readline for us and the check
+// would pass with or without the fix.
+const badSkill = await runAxe(["skill", "add", "garbage-source"], { ...plain, holdStdin: true, timeoutMs: 10_000 })
+check("a bad skill source exits 1", badSkill.code === 1, `code ${badSkill.code}`)
+check("and says why", badSkill.stderr.includes("Not a github source"), badSkill.stderr)
+
 const upCheck = await runAxe(["update", "--check"], plain)
 check("update --check is not a stray argument", upCheck.code !== 1, `code ${upCheck.code}`)
 
@@ -377,6 +392,70 @@ check(
 	/provider \u00b7 unauthorized/.test(classifiedText.stdout + classifiedText.stderr),
 	classifiedText.stdout + classifiedText.stderr,
 )
+
+// A command file cannot take a built-in name away from the session. `tools.md`
+// is the honest test: the built-in prints the tool list locally, so if the file
+// won instead the expansion would be sent to the fake endpoint and come back a
+// 401. Driven through the plain REPL, which reads piped stdin a line at a time.
+const shadowProject = newProject()
+mkdirSync(join(shadowProject, ".agents", "commands"), { recursive: true })
+writeFileSync(join(shadowProject, ".agents", "commands", "tools.md"), "SHADOWED-PROMPT\n")
+writeFileSync(join(shadowProject, ".agents", "commands", "recap.md"), "Summarise $ARGUMENTS\n")
+const shadowOpts = {
+	cwd: shadowProject,
+	home: newHome(`[providers.anthropic]\nbaseUrl = "http://127.0.0.1:${port}/v1"\n`),
+	env: { ANTHROPIC_API_KEY: "sk-test" },
+}
+const shadowed = await runAxe([], { ...shadowOpts, input: "/tools\nexit\n" })
+check("a built-in name survives a command file", !shadowed.stdout.includes("SHADOWED-PROMPT"), shadowed.stdout)
+check("and the built-in ran", shadowed.stdout.includes("read"), shadowed.stdout)
+// Silently ignoring the file is the trap: the picker lists it with the file's own
+// description, so the user has every reason to think theirs ran. Saying which
+// file lost, and where it is, is the difference between a rule and a mystery.
+check("and says the file lost", shadowed.stdout.includes("is built in"), shadowed.stdout)
+check("and names the file to rename", shadowed.stdout.includes("tools.md"), shadowed.stdout)
+
+// The listing is how someone finds out what the directory offers.
+const listedCommands = await runAxe(["commands"], shadowOpts)
+check("commands exits 0", listedCommands.code === 0, `code ${listedCommands.code}`)
+check("and lists the file", listedCommands.stdout.includes("/recap"), listedCommands.stdout)
+check("and names its scope", listedCommands.stdout.includes("project"), listedCommands.stdout)
+
+// A slash line that matches nothing must not be sent to the model as a prompt.
+const unknownSlash = await runAxe([], { ...shadowOpts, input: "/depoly staging\nexit\n" })
+check("an unknown slash line is not a turn", unknownSlash.stdout.includes("No command /depoly"), unknownSlash.stdout)
+check("and suggests what exists", unknownSlash.stdout.includes("/recap"), unknownSlash.stdout)
+
+// `axe -x /recap src` has to mean what typing it in the session means, or the
+// commands only exist for people with a terminal. Proved by the request body:
+// the expansion is what went out, not the line the user typed.
+await runAxe(["-x", "/recap staging"], shadowOpts)
+check("a one-shot expands the command", lastBody.includes("Summarise staging"), lastBody)
+check("and does not send the slash line", !lastBody.includes("/recap"), lastBody)
+
+// An unknown one exits instead of spending a turn on a typo.
+lastBody = ""
+const oneShotTypo = await runAxe(["-x", "/depoly staging"], shadowOpts)
+check("an unknown one-shot command exits 1", oneShotTypo.code === 1, `code ${oneShotTypo.code}`)
+check("and names it", oneShotTypo.stderr.includes("/depoly"), oneShotTypo.stderr)
+check("and makes no request", lastBody === "", lastBody)
+
+// --stream-json makes the same refusal readable by the caller reading the
+// stream, rather than only on stderr.
+const jsonTypo = await runAxe(["--stream-json", "/depoly staging"], shadowOpts)
+check("a stream-json typo emits an error event", jsonTypo.stdout.includes('"type":"error"'), jsonTypo.stdout)
+check("and names the command in it", jsonTypo.stdout.includes("/depoly"), jsonTypo.stdout)
+
+// --stream-json-input is the third way in, so it expands too. A bad name is one
+// bad line and not the end of the stream: the good line after it still runs.
+lastBody = ""
+const streamed = await runAxe(["--stream-json-input"], {
+	...shadowOpts,
+	input: '{"type":"user","text":"/depoly staging"}\n{"type":"user","text":"/recap prod"}\n',
+})
+check("a bad name is one error line", streamed.stdout.includes("No command /depoly"), streamed.stdout)
+check("and the next line still ran", lastBody.includes("Summarise prod"), lastBody)
+check("and its slash line was not sent", !lastBody.includes("/recap"), lastBody)
 
 // A mistyped flag must keep throwing after all these additions.
 const stillTypo = await runAxe(["--fastt", "hi"], plain)

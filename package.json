@@ -20,6 +20,7 @@
     "adapter-test": "node --experimental-strip-types scripts/adapter-test.ts",
     "subagent-test": "node --experimental-strip-types scripts/subagent-test.ts",
     "skills-test": "node --experimental-strip-types scripts/skills-test.ts",
+    "commands-test": "node --experimental-strip-types scripts/commands-test.ts",
     "agents-test": "node --experimental-strip-types scripts/agents-test.ts",
     "plugin-test": "node --experimental-strip-types scripts/plugin-test.ts",
     "mcp-test": "node --experimental-strip-types scripts/mcp-test.ts",
@@ -38,7 +39,7 @@
     "cli-test": "node --experimental-strip-types scripts/cli-test.ts",
     "release-test": "node --experimental-strip-types scripts/release-test.ts",
     "live-test": "node --experimental-strip-types scripts/live-test.ts",
-    "test": "npm run typecheck && npm run smoke && npm run args-test && npm run errors-test && npm run prompt-test && npm run compact-test && npm run loop-test && npm run adapter-test && npm run subagent-test && npm run skills-test && npm run agents-test && npm run plugin-test && npm run mcp-test && npm run skill-mcp-test && npm run tools-test && npm run skill-add-test && npm run review-test && npm run tui-test && npm run editor-test && npm run screen-test && npm run config-test && npm run doctor-test && npm run recovery-test && npm run reliability-test && npm run schedules-test && npm run permissions-test && npm run web-search-test && npm run clipboard-test && npm run cli-test && npm run release-test",
+    "test": "npm run typecheck && npm run smoke && npm run args-test && npm run errors-test && npm run prompt-test && npm run compact-test && npm run loop-test && npm run adapter-test && npm run subagent-test && npm run skills-test && npm run commands-test && npm run agents-test && npm run plugin-test && npm run mcp-test && npm run skill-mcp-test && npm run tools-test && npm run skill-add-test && npm run review-test && npm run tui-test && npm run editor-test && npm run screen-test && npm run config-test && npm run doctor-test && npm run recovery-test && npm run reliability-test && npm run schedules-test && npm run permissions-test && npm run web-search-test && npm run clipboard-test && npm run cli-test && npm run release-test",
     "build": "bun build --compile --minify src/cli.ts --outfile dist/axe",
     "release": "node --experimental-strip-types scripts/release.ts"
   },
